@@ -77,6 +77,7 @@ MODULE fist_force
    PUBLIC :: fist_calc_energy_force
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'fist_force'
 
+
 ! **************************************************************************************************
    TYPE debug_variables_type
       REAL(KIND=dp)                          :: pot_manybody, pot_bend, pot_torsion
@@ -118,7 +119,7 @@ CONTAINS
 
       INTEGER :: do_ipol, ewald_type, fg_coulomb_size, handle, i, ii, ikind, iparticle_kind, &
          iparticle_local, iw, iw2, j, natoms, nlocal_particles, node, nparticle_kind, &
-         nparticle_local, nshell, shell_index
+         nparticle_local, nshell, shell_index, natom_of_kind, iatom, nkind
       LOGICAL                                            :: do_multipoles, shell_model_ad, &
                                                             shell_present, use_virial
       REAL(KIND=dp) :: ef_ener, fc, fs, mass, pot_bend, pot_bond, pot_imptors, pot_manybody, &
@@ -132,6 +133,9 @@ CONTAINS
                                                             pv_opbend, pv_torsion, pv_urey_bradley
       REAL(KIND=dp), DIMENSION(:), POINTER               :: e_coulomb
       REAL(KIND=dp), DIMENSION(:, :, :), POINTER         :: pv_coulomb
+      INTEGER, DIMENSION(:), POINTER                     :: atom_list
+
+      REAL(KIND=dp)                                      :: apol
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(atomic_kind_type), POINTER                    :: atomic_kind
       TYPE(atprop_type), POINTER                         :: atprop_env
@@ -461,6 +465,34 @@ CONTAINS
                END IF
                CALL mp_sum(fg_coulomb, para_env%group)
             END SELECT
+         END IF
+
+         !RSD: print dipoles and compute induction energy!
+         IF (do_multipoles) THEN
+            WRITE (*,*) "*****DIPOLES*****"
+            DO ii = 1, natoms
+                WRITE (*,*) multipoles%dipoles(:,ii)
+            END DO
+            WRITE (*,*) "*****END_DIPOLES*****"
+            ! Compute induction energy (this normally only happens if FF is 'polarizable')
+            IF (do_ipol == do_fist_pol_none) THEN
+               thermo%e_induction = 0.0_dp
+               nkind = SIZE(atomic_kind_set)
+               DO ikind = 1, nkind
+                  atomic_kind => atomic_kind_set(ikind)
+                  CALL get_atomic_kind(atomic_kind, apol=apol, natom=natom_of_kind, atom_list=atom_list)
+                  ! ignore atoms with polarizability zero
+                  IF (apol == 0) CYCLE
+                  DO iatom = 1, natom_of_kind
+                     ii = atom_list(iatom)
+                     DO i = 1, 3
+                        thermo%e_induction = thermo%e_induction + multipoles%dipoles(i, ii)**2/apol/2.0_dp
+                     END DO
+                  END DO
+               END DO
+            END IF
+            ! RSD: print induction energy
+            WRITE(*,*) "INDUCTION ENERGY: ", thermo%e_induction
          END IF
 
          ! Subtract the interaction between screening charges. This is a
